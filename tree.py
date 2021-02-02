@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.stats import norm
 
 
 def buildTree(S, vol, T, N):
@@ -32,6 +33,9 @@ def valueOptionMatrix(tree, T, r, K, vol):
         S = tree[rows - 1, c]
         tree[rows - 1, c] = max(0, S - K)
 
+        # print(S, K)
+        # print(max(0, S - K))
+
     for i in np.arange(rows - 1)[::-1]:
         for j in np.arange(i + 1):
             down = tree[i + 1, j]
@@ -49,4 +53,18 @@ r = 0.06
 tree = buildTree(S, sigma, T, N)
 valueOptionMatrix(tree, T, r, K, sigma)
 
-print(tree[0, 0])
+# Analytical with Black-scholes
+def blackScholesExp(t, T, S_t, sigma):
+
+    d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * (T - t)) / (sigma * np.sqrt(T - t))
+    d2 = d1 - sigma * np.sqrt(T - t)
+
+    return S * norm.cdf(d1) - np.exp(-r * (T - t)) * K * norm.cdf(d2)
+
+
+backwards = tree[0, 0]
+analytical = blackScholesExp(0, T, S, sigma)
+difference = abs(backwards - analytical)
+print(
+    f"Difference between backwards induction: {backwards} and Black-Scholes: {analytical} is {abs(backwards - analytical)}."
+)
