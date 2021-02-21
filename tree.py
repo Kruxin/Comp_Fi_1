@@ -3,6 +3,7 @@ from scipy.stats import norm
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import copy
+import pandas as pd
 
 
 class Error(Exception):
@@ -94,7 +95,7 @@ def valueOptionMatrix(tree, T, N, r, K, vol, option="call") -> None:
             tree[i, j] = value
 
 
-def blackScholesExp(t, T, S_t, K, vol, r) -> tuple:
+def blackScholesExp(t, T, S_t, K, vol, r, option="call") -> tuple:
     """
     Calculates the derivative value at t=0 using Black Scholes expectation value
     :param t: time t = initial time
@@ -108,7 +109,55 @@ def blackScholesExp(t, T, S_t, K, vol, r) -> tuple:
     d1 = (np.log(S_t / K) + (r + 0.5 * vol ** 2) * (T - t)) / (vol * np.sqrt(T - t))
     d2 = d1 - vol * np.sqrt(T - t)
 
-    return (S_t * norm.cdf(d1) - np.exp(-r * (T - t)) * K * norm.cdf(d2), d2)
+    try:
+
+        if option == "call":
+            return (S_t * norm.cdf(d1) - np.exp(-r * (T - t)) * K * norm.cdf(d2), d1)
+
+        elif option == "put":
+            return (K * np.exp(-r * (T - t)) * norm.cdf(-d2) - S_t * norm.cdf(-d1), d1)
+
+        else:
+            raise InputError(option)
+
+    except InputError as e:
+        print(f"{e.expression} not a valid option. Try EU or USA.")
+
+
+def optionValue(
+    max_steps, S, T, K, r, vol, derivative="call", model="binomial"
+) -> float:
+    """
+    Simulates the derivative value for both models and options
+    :param max_steps: Maximum number of steps to check for difference
+    :param S: Stock value at t=0
+    :param T: Timescale. Lower value means higher precision
+    :param K: Strike price
+    :param r: Interest rate 
+    :param vol: Volatility
+    :return: tuple of values
+    """
+    eu_value, usa_value = 0, 0
+    try:
+        if model == "binomial":
+            tree = buildTree(S, vol, T, max_steps)
+            valueOptionMatrix(tree, T, max_steps, r, K, vol, option=derivative)
+            eu_value = tree[0, 0]
+
+            tree = buildTree(S, vol, T, max_steps)
+            americanOptionMatrix(tree, T, max_steps, r, K, vol, option=derivative)
+            usa_value = tree[0, 0]
+
+        elif model == "blackscholes":
+            eu_value = blackScholesExp(0, T, S, K, vol, r, option=derivative)[0]
+
+        else:
+            raise InputError(model)
+
+    except InputError as e:
+        print(f"{e.expression} not a valid model. Try binomial or blackscholes.")
+
+    return eu_value, usa_value
 
 
 def converge(max_steps, S, T, K, r, vol, option="EU", derivative="call") -> list:
@@ -124,7 +173,7 @@ def converge(max_steps, S, T, K, r, vol, option="EU", derivative="call") -> list
     """
 
     difference = []
-    reference = blackScholesExp(0, T, S, K, vol, r)[0]
+    reference = blackScholesExp(0, T, S, K, vol, r, option=derivative)[0]
 
     try:
         if option == "EU":
@@ -149,7 +198,7 @@ def converge(max_steps, S, T, K, r, vol, option="EU", derivative="call") -> list
     return difference
 
 
-def hedge_ratio(max_steps, N, S, T, K, r, option="EU", derivative="call") -> list:
+def hedge_ratio(max_steps, N, S, T, K, r, derivative="call") -> list:
     """
     Simulates the difference in hedge ratios between black scholes and binomial tree as a function of volatility
     :param max_steps: Maximum number of steps to check for difference
@@ -163,46 +212,21 @@ def hedge_ratio(max_steps, N, S, T, K, r, option="EU", derivative="call") -> lis
 
     difference = []
 
-    try:
+    for vol in tqdm(np.arange(0, 1 + 1 / max_steps, 1 / max_steps)[1:]):
 
-        if option == "EU":
-            for vol in tqdm(np.arange(0, 1 + 1 / max_steps, 1 / max_steps)[1:]):
+        tree = buildTree(S, vol, T, N)
+        u = tree[1, 1]
+        d = tree[1, 0]
+        valueOptionMatrix(tree, T, N, r, K, vol, option=derivative)
+        fu = tree[1, 1]
+        fd = tree[1, 0]
 
-                tree = buildTree(S, vol, T, N)
-                u = tree[1, 1]
-                d = tree[1, 0]
-                valueOptionMatrix(tree, T, N, r, K, vol, option=derivative)
-                fu = tree[1, 1]
-                fd = tree[1, 0]
+        d1 = blackScholesExp(0, T, S, K, vol, r, option=derivative)[1]
 
-                d2 = blackScholesExp(0, T, S, K, vol, r)[1]
+        hedge_black = norm.cdf(d1)
+        hedge_tree = (fu - fd) / (u - d)
 
-                hedge_black = norm.cdf(d2)
-                hedge_tree = (fu - fd) / (u - d)
-
-                difference.append(abs(hedge_black - hedge_tree))
-
-        elif option == "USA":
-            for vol in tqdm(np.arange(0, 1 + 1 / max_steps, 1 / max_steps)[1:]):
-
-                tree = buildTree(S, vol, T, N)
-                u = tree[1, 1]
-                d = tree[1, 0]
-                americanOptionMatrix(tree, T, N, r, K, vol, option=derivative)
-                fu = tree[1, 1]
-                fd = tree[1, 0]
-
-                d2 = blackScholesExp(0, T, S, K, vol, r)[1]
-
-                hedge_black = norm.cdf(d2)
-                hedge_tree = (fu - fd) / (u - d)
-
-                difference.append(abs(hedge_black - hedge_tree))
-        else:
-            raise InputError(option)
-
-    except InputError as e:
-        print(f"{e.expression} not a valid option. Try EU or USA.")
+        difference.append(abs(hedge_black - hedge_tree))
 
     return difference
 
@@ -265,73 +289,170 @@ def americanOptionMatrix(tree, T, N, r, K, vol, option="call") -> None:
                 tree[i, j] = value
 
 
+def compare(max_steps, N, S, T, K, r) -> list:
+    """
+    Calculates the derivative value with backward induction, starting at the last node for american options
+    :param max_steps: Marginalization of volatility
+    :param T: Timescale. Lower value means higher precision
+    :param N: Number of steps/nodes in the tree
+    :param r: Interest rate
+    :param K: Strike price
+    :return: List of errors
+    """
+
+    difference = []
+
+    for vol in tqdm(np.arange(0, 1 + 1 / max_steps, 1 / max_steps)[1:]):
+
+        eu_binomial = optionValue(
+            N, S, T, K, r, vol, derivative=EU_derivative, model="binomial"
+        )[0]
+        eu_blackscholes = optionValue(
+            N, S, T, K, r, vol, derivative=EU_derivative, model="blackscholes"
+        )[0]
+
+        difference.append(abs(eu_binomial - eu_blackscholes))
+
+    return difference
+
+
+def americanSimulate(max_steps, T, N, r, K) -> list:
+    """
+    Simulates the American call option vs the American put option
+    :param T: Timescale. Lower value means higher precision
+    :param N: Number of steps/nodes in the tree
+    :param r: Interest rate
+    :param K: Strike price
+    :return: Two lists with Call values and Put values at T=0
+    """
+
+    call_values = []
+    put_values = []
+    eu_put = []
+
+    for vol in tqdm(np.arange(0, 1 + 1 / max_steps, 1 / max_steps)[1:]):
+
+        tree1 = buildTree(S, vol, T, N)
+        tree2 = buildTree(S, vol, T, N)
+        tree3 = buildTree(S, vol, T, N)
+
+        americanOptionMatrix(tree1, T, N, r, K, vol, option="call")
+        americanOptionMatrix(tree2, T, N, r, K, vol, option="put")
+        valueOptionMatrix(tree3, T, N, r, K, vol, option="call")
+
+        call_values.append(tree1[0, 0])
+        put_values.append(tree2[0, 0])
+        eu_put.append(tree3[0, 0])
+
+    return call_values, put_values, eu_put
+
+
 if __name__ == "__main__":
 
-    fig, axs = plt.subplots(2, 2, figsize=(11, 5))
-    max_steps = 100
+    max_steps = 50
     T = 1
     S = 100
     K = 99
     vol = 0.2
     r = 0.06
-    EU_derivative = "put"
-    USA_derivative = "put"
+    EU_derivative = "call"
+    USA_derivative = "call"
+
+    eu_binomial = optionValue(
+        max_steps, S, T, K, r, vol, derivative=EU_derivative, model="binomial"
+    )[0]
+    eu_blackscholes = optionValue(
+        max_steps, S, T, K, r, vol, derivative=EU_derivative, model="blackscholes"
+    )[0]
+
+    print(
+        f"The option value is {eu_binomial} from the binomial tree and {eu_blackscholes} from Black Scholes for N={max_steps}."
+    )
 
     error_eu = converge(
         max_steps, S, T, K, r, vol, option="EU", derivative=EU_derivative
     )
-    error_usa = converge(
-        max_steps, S, T, K, r, vol, option="USA", derivative=USA_derivative
-    )
 
-    axs[0][0].plot(error_eu, "r-", linewidth=0.4)
-    axs[0][0].plot(
+    plt.plot(error_eu, "r-", linewidth=1.2)
+    plt.plot(
         max_steps - 1,
         error_eu[-1],
         "bo",
         label=f"Convergence = {round(error_eu[-1], 5)}",
     )
 
-    axs[0][0].set_title("Option value EU")
-    axs[0][0].set_xlabel("N (steps)")
-    axs[0][0].set_ylabel("Error")
-    axs[0][0].legend()
-
-    axs[1][0].plot(error_usa, "r-", linewidth=0.4)
-    axs[1][0].plot(
-        max_steps - 1,
-        error_usa[-1],
-        "bo",
-        label=f"Convergence = {round(error_usa[-1], 5)}",
-    )
-
-    axs[1][0].set_title("Option value USA")
-    axs[1][0].set_xlabel("N (steps)")
-    axs[1][0].set_ylabel("Error")
-    axs[1][0].legend()
-
-    # Hedge parameter at t=0
-    N = 100
-    error_hedge_eu = hedge_ratio(
-        max_steps, N, S, T, K, r, option="EU", derivative=EU_derivative
-    )
-    error_hedge_usa = hedge_ratio(
-        max_steps, N, S, T, K, r, option="USA", derivative=USA_derivative
-    )
-
-    axs[0][1].set_title("Hedge ratio EU")
-    axs[0][1].plot(
-        np.arange(1 / max_steps, 1 + 1 / max_steps, 1 / max_steps), error_hedge_eu
-    )
-    axs[0][1].set_xlabel("Volatility")
-    axs[0][1].set_ylabel("Error")
-
-    axs[1][1].set_title("Hedge ratio USA")
-    axs[1][1].plot(
-        np.arange(1 / max_steps, 1 + 1 / max_steps, 1 / max_steps), error_hedge_usa
-    )
-    axs[1][1].set_xlabel("Volatility")
-    axs[1][1].set_ylabel("Error")
+    plt.title("European option value", fontsize=28)
+    plt.xlabel("N (steps)", fontsize=25)
+    plt.ylabel("Error", fontsize=25)
+    plt.legend(fontsize=20)
+    plt.xticks(fontsize=18)
+    plt.yticks(fontsize=18)
 
     plt.show()
 
+    # Compare binomial and black scholes depending on volatility
+    max_steps = 100
+    N = 50
+    error_volatility = compare(max_steps, N, S, T, K, r)
+
+    plt.plot(
+        np.arange(0, 1 + 1 / max_steps, 1 / max_steps)[1:],
+        error_volatility,
+        "r-",
+        linewidth=1.2,
+    )
+
+    plt.xlabel("Volatility", fontsize=25)
+    plt.ylabel("Error", fontsize=25)
+    plt.title("European option value N=50", fontsize=25)
+    plt.xticks(fontsize=18)
+    plt.yticks(fontsize=18)
+    plt.xlim(0, 1)
+    plt.ylim(0, 0.15)
+    plt.vlines(0.01, 0, 0.15, linestyle="--")
+    plt.vlines(0.22, 0, 0.15, linestyle="--")
+
+    x = [0, 0.01]
+
+    plt.fill_between(x, -0.01, 0.18, alpha=0.5)
+    plt.show()
+
+    # Hedge parameter at t=0
+    N = 100
+    max_steps = 200
+    error_hedge_eu = hedge_ratio(max_steps, N, S, T, K, r, derivative=EU_derivative)
+
+    plt.title("Hedge ratio", fontsize=25)
+    plt.plot(np.arange(1 / max_steps, 1 + 1 / max_steps, 1 / max_steps), error_hedge_eu)
+    plt.xlabel("Volatility", fontsize=25)
+    plt.ylabel("Error", fontsize=25)
+    plt.xticks(fontsize=18)
+    plt.yticks(fontsize=18)
+    plt.xlim(0, 1)
+    plt.ylim(0, 0.0012)
+    plt.show()
+
+    N = 100
+    max_steps = 200
+    call_values, put_values, eu_put = americanSimulate(max_steps, T, N, r, K)
+
+    plt.plot(
+        np.arange(0, 1 + 1 / max_steps, 1 / max_steps)[1:],
+        call_values,
+        "g-",
+        label="American call",
+    )
+    plt.plot(
+        np.arange(0, 1 + 1 / max_steps, 1 / max_steps)[1:],
+        put_values,
+        "r-",
+        label="American put",
+    )
+
+    plt.title("American option value at T=0", fontsize=25)
+    plt.xlabel("Volatility", fontsize=25)
+    plt.ylabel("Option value", fontsize=25)
+    plt.xticks(fontsize=18)
+    plt.yticks(fontsize=18)
+    plt.legend(fontsize=20)
+    plt.show()
