@@ -3,7 +3,6 @@ from scipy.stats import norm
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import copy
-import pandas as pd
 
 
 class Error(Exception):
