@@ -328,6 +328,7 @@ def americanSimulate(max_steps, T, N, r, K) -> list:
 
     call_values = []
     put_values = []
+    eu_call = []
     eu_put = []
 
     for vol in tqdm(np.arange(0, 1 + 1 / max_steps, 1 / max_steps)[1:]):
@@ -335,16 +336,19 @@ def americanSimulate(max_steps, T, N, r, K) -> list:
         tree1 = buildTree(S, vol, T, N)
         tree2 = buildTree(S, vol, T, N)
         tree3 = buildTree(S, vol, T, N)
+        tree4 = buildTree(S, vol, T, N)
 
         americanOptionMatrix(tree1, T, N, r, K, vol, option="call")
         americanOptionMatrix(tree2, T, N, r, K, vol, option="put")
         valueOptionMatrix(tree3, T, N, r, K, vol, option="call")
+        valueOptionMatrix(tree4, T, N, r, K, vol, option="put")
 
         call_values.append(tree1[0, 0])
         put_values.append(tree2[0, 0])
-        eu_put.append(tree3[0, 0])
+        eu_call.append(tree3[0, 0])
+        eu_put.append(tree4[0, 0])
 
-    return call_values, put_values, eu_put
+    return call_values, put_values, eu_call, eu_put
 
 
 if __name__ == "__main__":
@@ -432,9 +436,10 @@ if __name__ == "__main__":
     plt.ylim(0, 0.0012)
     plt.show()
 
+    # Simulate early exercise
     N = 100
     max_steps = 200
-    call_values, put_values, eu_put = americanSimulate(max_steps, T, N, r, K)
+    call_values, put_values, eu_call, eu_put = americanSimulate(max_steps, T, N, r, K)
 
     plt.plot(
         np.arange(0, 1 + 1 / max_steps, 1 / max_steps)[1:],
@@ -447,6 +452,18 @@ if __name__ == "__main__":
         put_values,
         "r-",
         label="American put",
+    )
+    plt.plot(
+        np.arange(0, 1 + 1 / max_steps, 1 / max_steps)[1:],
+        eu_call,
+        "b-",
+        label="European call",
+    )
+    plt.plot(
+        np.arange(0, 1 + 1 / max_steps, 1 / max_steps)[1:],
+        eu_put,
+        color="orange",
+        label="European put",
     )
 
     plt.title("American option value at T=0", fontsize=25)
